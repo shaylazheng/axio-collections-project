@@ -2,11 +2,12 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+from pandas.tseries.offsets import DateOffset
 
 def aggregate_disposition_lan(raw: pd.DataFrame) -> pd.DataFrame:
     '''
     An aggregation function that creates various features after
-    grouping the original raw dataframe by the 'lan' field
+    grouping the original disposition dataframe by the 'lan' field
     '''
     categorized = raw.groupby('lan').agg(
         # Disposition counts
@@ -46,6 +47,11 @@ def aggregate_disposition_lan(raw: pd.DataFrame) -> pd.DataFrame:
     return categorized
 
 def aggregate_bounce_lan(raw: pd.DataFrame) -> pd.DataFrame:
+    '''
+    An aggregation function that creates various features after
+    grouping the original bounce dataframe by the 'lan' field
+    '''
+
     categorized = raw.groupby('lan').agg(
         avg_duration_between_dues=('time_since_last_due', 'mean'),
         num_pl_streaks=('is_pl_streak_end', 'count'),
@@ -79,6 +85,11 @@ def aggregate_bounce_lan(raw: pd.DataFrame) -> pd.DataFrame:
 
 def training_set_split(start: datetime, num_intervals: int, interval_magnitude: int, 
                        raw: pd.DataFrame, date_col_name: str) -> dict:
+    """
+    Split the data set into an inputted number of intervals, with an inputted length
+    of that interval, returning a dictionary
+    """
+    
     df_split = {}
 
     for i in range(num_intervals):
@@ -89,7 +100,7 @@ def training_set_split(start: datetime, num_intervals: int, interval_magnitude: 
 
         df_interval_split = raw[
             ((raw[date_col_name].dt.date >= current_start.date())&
-             (raw[date_col_name].dt.date >= current_end.date()))
+             (raw[date_col_name].dt.date <= current_end.date()))
         ].copy()
 
         df_split[key] = df_interval_split
@@ -116,19 +127,9 @@ def add_streak_features(df: pd.DataFrame) -> pd.DataFrame:
 def create_dummy_data(num_customers=50, num_dues_per_customer=10) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Generates realistic dummy due and disposition DataFrames for testing.
-
-    Args:
-        num_customers: The number of unique customers (lan) to generate.
-        num_dues_per_customer: The average number of dues per customer.
-
-    Returns:
-        A tuple containing two DataFrames: (df_due, df_disposition)
-    """
-    print(f"Generating dummy data for {num_customers} customers...")
-    
+    """    
     num_rows_due = num_customers * num_dues_per_customer
     
-    # --- Create Dummy Due DataFrame ---
     due_data = {
         'lan': np.repeat(np.arange(1001, 1001 + num_customers), num_dues_per_customer),
         'due_date': pd.to_datetime('2023-01-01') + pd.to_timedelta(np.random.randint(0, 730, size=num_rows_due), unit='d'),
@@ -170,7 +171,6 @@ def create_dummy_data(num_customers=50, num_dues_per_customer=10) -> tuple[pd.Da
     df_due = pd.DataFrame(due_data)
     df_due = df_due.sort_values(by=['lan', 'due_date']).reset_index(drop=True)
 
-    # --- Create Dummy Disposition DataFrame ---
     num_rows_disp = num_rows_due * 3 # Assume 3 contacts per due on average
     disp_data = {
         'lan': np.random.choice(df_due['lan'].unique(), size=num_rows_disp),
@@ -190,7 +190,6 @@ def create_dummy_data(num_customers=50, num_dues_per_customer=10) -> tuple[pd.Da
     }
     df_disposition = pd.DataFrame(disp_data)
     
-    # Add due_date by merging, simulating a real-world scenario
     df_disposition = pd.merge_asof(
         df_disposition.sort_values('created_at'),
         df_due[['lan', 'due_date']].sort_values('due_date'),
@@ -200,19 +199,39 @@ def create_dummy_data(num_customers=50, num_dues_per_customer=10) -> tuple[pd.Da
         direction='nearest'
     )
     
-    # Pre-compute time since last contact features
     df_disposition = df_disposition.sort_values(by=['lan', 'created_at'])
     df_disposition['time_since_last_contact'] = df_disposition.groupby('lan')['created_at'].diff().dt.days
     
-    # Create specific time_since columns for different types
     for contact_type, col_name in [('CALL', 'time_since_last_call'), ('SMS', 'time_since_last_sms'), ('DISPOSITION', 'time_since_last_disposition_event')]:
         df_disp_type = df_disposition[df_disposition['type'] == contact_type].copy()
         df_disp_type[col_name] = df_disp_type.groupby('lan')['created_at'].diff().dt.days
         df_disposition = pd.merge(df_disposition, df_disp_type[['lan', 'created_at', col_name]], on=['lan', 'created_at'], how='left')
 
-    print("Dummy data generated successfully.")
     return df_due, df_disposition
 
+def merge_dispositions_to_dues(df_due: pd.DataFrame, df_disposition: pd.DataFrame) -> pd.DataFrame:
+    """
+    Correctly merges disposition events to their corresponding dues using a 
+    time-aware join, bringing along the final outcome flags.
+    """
+    df_due_lookup = df_due[['lan', 'due_date', 'fl_bounce_tp3', 'fl_bounce_tp5']].copy()
+
+    df_disposition_sorted = df_disposition.sort_values(by='created_at')
+    df_due_lookup_sorted = df_due_lookup.sort_values(by='due_date')
+
+    merged = pd.merge_asof(
+        df_disposition_sorted,
+        df_due_lookup_sorted,
+        left_on='created_at',
+        right_on='due_date',
+        by='lan',
+        direction='forward'
+    )
+    return merged
+
 def apply_function(raw: dict, function):
+    """
+    Simply applies a function to a dictionary
+    """
     for item in raw:
         raw[item] = function(raw[item])

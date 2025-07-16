@@ -11,11 +11,10 @@ df_bounce_raw = dpu.add_streak_features(df_bounce_raw)
 
 df_disposition_raw['created_at'] = pd.to_datetime(df_disposition_raw['created_at'], format = 'mixed', errors = 'coerce')
 
-# print(df_bounce_raw.columns)
-# print(df_disposition_raw.columns)
+df_raw_merged = dpu.merge_dispositions_to_dues(df_bounce_raw, df_disposition_raw)
 
 df_bounce_lan = dpu.aggregate_bounce_lan(df_bounce_raw)
-df_disposition_lan = dpu.aggregate_disposition_lan(df_disposition_raw)
+df_disposition_lan = dpu.aggregate_disposition_lan(df_raw_merged)
 
 start_date_for_split = datetime(2023, 9, 5)
 num_intervals = 6
@@ -25,9 +24,8 @@ interval_magnitude = 12
 df_bounce_raw_split = dpu.training_set_split(start_date_for_split, num_intervals, 
     interval_magnitude, df_bounce_raw, 'due_date')
 df_disposition_raw_split = dpu.training_set_split(start_date_for_split, num_intervals, 
-    interval_magnitude, df_disposition_raw, 'created_at')
+    interval_magnitude, df_raw_merged, 'created_at')
 
-# Test intervals for lan grouped
 df_bounce_lan_split = df_bounce_raw_split.copy()
 df_disposition_lan_split = df_bounce_raw_split.copy()
 
